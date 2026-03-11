@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 from pathlib import Path
 
 from web3 import Web3
@@ -21,8 +22,14 @@ from src.db.database import get_session, init_db
 CHAIN_ID             = 1
 ALCHEMY_FREE_MAX_RANGE = 10   # Alchemy 免费套餐 eth_getLogs 单次最多查 10 个区块
 
-FROM_BLOCK = 12369621
-TO_BLOCK   = 12379621
+# eth_getLogs 每次消耗 75 CU，免费套餐上限 330 CU/s，约合 4 次/s
+# 保守取 0.3s 间隔（约 3.3 次/s），留一些余量给其他请求（如 ERC20 call）
+REQUEST_INTERVAL = 0.3        # 每批拉取之间的正常间隔（秒）
+RETRY_MAX        = 5          # 遇到 429 最多重试次数
+RETRY_BASE_DELAY = 2.0        # 第一次退避等待时间（秒），每次翻倍
+
+FROM_BLOCK = 12389621
+TO_BLOCK   = 13389621
 
 # ── RPC 连接 ─────────────────────────────────────────────────────────────────
 w3 = Web3(Web3.HTTPProvider(MAINNET_RPC_URL))
@@ -107,6 +114,30 @@ def _ensure_token(session, token_address: str) -> None:
     _token_cache.add(addr)
 
 
+# ── RPC 限流工具 ──────────────────────────────────────────────────────────────
+
+def _get_logs_with_retry(params: dict) -> list:
+    """
+    带指数退避重试的 eth_getLogs。
+    遇到 429（超出 Alchemy CU 限额）时等待后重试，而不是直接退出。
+    """
+    delay = RETRY_BASE_DELAY
+    for attempt in range(1, RETRY_MAX + 1):
+        try:
+            return w3.eth.get_logs(params)
+        except Exception as e:
+            if "429" in str(e):
+                if attempt == RETRY_MAX:
+                    print(f"    已重试 {RETRY_MAX} 次仍触发限流，放弃。")
+                    raise
+                print(f"    触发限流 (429)，{delay:.1f}s 后第 {attempt} 次重试...")
+                time.sleep(delay)
+                delay *= 2  # 指数退避
+            else:
+                raise
+    return []  # 不会到达这里，仅满足类型检查
+
+
 # ── 数据库初始化 ───────────────────────────────────────────────────────────────
 init_db()
 print("数据库表已就绪\n")
@@ -120,7 +151,7 @@ while batch_start <= TO_BLOCK:
     batch_end = min(batch_start + ALCHEMY_FREE_MAX_RANGE - 1, TO_BLOCK)
     print(f"  拉取区块 {batch_start} ~ {batch_end} ...")
     try:
-        batch_logs = w3.eth.get_logs({
+        batch_logs = _get_logs_with_retry({
             "address":   factory_address,
             "fromBlock": hex(batch_start),
             "toBlock":   hex(batch_end),
@@ -128,9 +159,10 @@ while batch_start <= TO_BLOCK:
         })
         raw_logs.extend(batch_logs)
     except Exception as e:
-        print(f"获取区块 {batch_start}~{batch_end} 失败: {e}")
+        print(f"获取区块 {batch_start}~{batch_end} 最终失败: {e}")
         sys.exit(1)
     batch_start = batch_end + 1
+    time.sleep(REQUEST_INTERVAL)  # 限速：控制请求频率，避免触发 429
 
 events = [factory.events.PoolCreated().process_log(log) for log in raw_logs]
 print(f"\n共获取到 {len(events)} 个 PoolCreated 事件\n")
