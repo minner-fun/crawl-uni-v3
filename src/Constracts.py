@@ -9,6 +9,7 @@ MAINNET_RPC_URL = os.environ["MAINNET_RPC_URL"]
 
 # fastory create block FROM_BLOCK = 12369621
 UNISWAP_V3_FACTORY_ADDRESS = "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+# pool create block FROM_BLOCK = 12376729，，start 21500000
 UNISWAP_V3_USDC_ETH_POOL_ADDRESS = "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
 
 # 仅含 symbol / name / decimals 三个只读函数，足够采集 token 基础信息。

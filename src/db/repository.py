@@ -25,7 +25,7 @@ from typing import Optional
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from src.db.models import Burn, Collect, Mint, Pool, Swap, SyncCursor, Token
+from src.db.models import Block, Burn, Collect, Mint, Pool, Swap, SyncCursor, Token
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +188,84 @@ def bulk_insert_collects(session: Session, data_list: list[dict]) -> int:
     )
     result = session.execute(stmt)
     return result.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Block（区块时间戳持久化缓存）
+# ---------------------------------------------------------------------------
+
+def get_block_timestamp(
+    session: Session,
+    chain_id: int,
+    block_number: int,
+) -> Optional[datetime]:
+    """
+    从 DB 中读取区块时间戳。
+    未命中返回 None，调用方负责从链上获取后调用 upsert_block 写入。
+    """
+    row = session.get(Block, (chain_id, block_number))
+    return row.block_timestamp if row else None
+
+
+def upsert_block(
+    session: Session,
+    chain_id: int,
+    block_number: int,
+    block_timestamp: datetime,
+) -> None:
+    """写入区块时间戳，已存在则忽略（区块时间戳链上不可变）。"""
+    stmt = (
+        pg_insert(Block)
+        .values(
+            chain_id        = chain_id,
+            block_number    = block_number,
+            block_timestamp = block_timestamp,
+        )
+        .on_conflict_do_nothing()
+    )
+    session.execute(stmt)
+
+
+def get_or_fetch_block_timestamps(
+    session: Session,
+    chain_id: int,
+    block_numbers: set[int],
+    rpc_fetcher,          # Callable[[int], datetime]，由调用方传入，避免 repo 依赖 web3
+) -> dict[int, datetime]:
+    """
+    批量获取区块时间戳，DB 优先，缺失的调用 rpc_fetcher 从链上补充后持久化。
+
+    参数：
+        rpc_fetcher: 接受 block_number(int)，返回 datetime 的函数，
+                     例如：lambda bn: datetime.utcfromtimestamp(w3.eth.get_block(bn)["timestamp"])
+
+    返回：
+        {block_number: datetime} 的完整映射
+
+    示例：
+        ts_map = repo.get_or_fetch_block_timestamps(
+            session, CHAIN_ID, unique_blocks,
+            rpc_fetcher=lambda bn: datetime.utcfromtimestamp(w3.eth.get_block(bn)["timestamp"])
+        )
+    """
+    ts_map: dict[int, datetime] = {}
+    missing: list[int] = []
+
+    for bn in block_numbers:
+        cached = get_block_timestamp(session, chain_id, bn)
+        if cached is not None:
+            ts_map[bn] = cached
+        else:
+            missing.append(bn)
+
+    if missing:
+        missing.sort()
+        for bn in missing:
+            ts = rpc_fetcher(bn)
+            upsert_block(session, chain_id, bn, ts)
+            ts_map[bn] = ts
+
+    return ts_map
 
 
 # ---------------------------------------------------------------------------

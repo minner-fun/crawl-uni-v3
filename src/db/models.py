@@ -22,6 +22,23 @@ class Base(DeclarativeBase):
 
 
 # ---------------------------------------------------------------------------
+# 区块时间戳持久化缓存
+# ---------------------------------------------------------------------------
+
+class Block(Base):
+    """
+    区块时间戳的持久化缓存表。
+    每个区块只从链上查一次，后续采集直接走 DB，节省 RPC CU 消耗。
+    使用 (chain_id, block_number) 联合主键，为多链扩展预留空间。
+    """
+    __tablename__ = "blocks"
+
+    chain_id        = Column(Integer, nullable=False, default=1, primary_key=True)
+    block_number    = Column(BigInteger, nullable=False, primary_key=True)
+    block_timestamp = Column(DateTime, nullable=False)
+
+
+# ---------------------------------------------------------------------------
 # 第一层：token / pool 基础信息
 # ---------------------------------------------------------------------------
 
