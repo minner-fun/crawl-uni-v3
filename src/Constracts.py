@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 MAINNET_RPC_URL = os.environ["MAINNET_RPC_URL"]
+MAINNET_WS_URL  = os.environ.get("MAINNET_WS_URL", "")
 
 
 UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
