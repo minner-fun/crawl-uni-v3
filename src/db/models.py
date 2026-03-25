@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.sql import func
 
@@ -393,4 +394,84 @@ class PoolMetricsDaily(Base):
     __table_args__ = (
         UniqueConstraint("pool_address", "metric_date", name="uq_daily_pool_date"),
         Index("idx_daily_pool_date", "pool_address", "metric_date"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 第四层：策略执行状态表
+# ---------------------------------------------------------------------------
+
+class LpPosition(Base):
+    """
+    记录策略开出的每一个 LP 仓位。
+    position_id = str(NFT tokenId)，全局唯一。
+    """
+    __tablename__ = "lp_positions"
+
+    id            = Column(BigInteger, primary_key=True, autoincrement=True)
+    position_id   = Column(String(128), unique=True, nullable=False)
+    pool_address  = Column(String(42), ForeignKey("pools.pool_address"), nullable=False)
+    owner_address = Column(String(42), nullable=False)
+    tick_lower    = Column(Integer, nullable=False)
+    tick_upper    = Column(Integer, nullable=False)
+    liquidity     = Column(Numeric(78, 0), nullable=False, default=0)
+    opened_at     = Column(DateTime, nullable=False)
+    closed_at     = Column(DateTime)
+    status        = Column(String(32), nullable=False, default="OPEN")
+    created_at    = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at    = Column(DateTime, nullable=False, server_default=func.now(),
+                           onupdate=func.now())
+
+    __table_args__ = (
+        Index("idx_lp_positions_pool",   "pool_address"),
+        Index("idx_lp_positions_status", "status"),
+    )
+
+
+class LpPositionAction(Base):
+    """
+    记录每个仓位的生命周期动作：OPEN / COLLECT / REBALANCE_CLOSE / REBALANCE_OPEN / CLOSE。
+    """
+    __tablename__ = "lp_position_actions"
+
+    id           = Column(BigInteger, primary_key=True, autoincrement=True)
+    position_id  = Column(String(128), nullable=False)
+    action_type  = Column(String(32),  nullable=False)
+    tx_hash      = Column(String(66))
+    block_number = Column(BigInteger)
+    action_time  = Column(DateTime, nullable=False)
+    metadata     = Column(JSONB)
+    created_at   = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_lp_actions_position_id", "position_id"),
+        Index("idx_lp_actions_type",        "action_type"),
+    )
+
+
+class StrategySignal(Base):
+    """
+    策略每次运行的决策快照，用于审计与离线回测。
+    signal_type: OPEN | HOLD | REBALANCE | CLOSE
+    signal_score: 触发信号的量化分数（如 avg volume/tvl）
+    """
+    __tablename__ = "strategy_signals"
+
+    id                      = Column(BigInteger, primary_key=True, autoincrement=True)
+    pool_address            = Column(String(42), ForeignKey("pools.pool_address"), nullable=False)
+    chain_id                = Column(Integer, nullable=False, default=1)
+    signal_time             = Column(DateTime, nullable=False)
+    signal_type             = Column(String(64), nullable=False)
+    signal_score            = Column(Numeric(20, 10))
+    recommended_lower_price = Column(Numeric(38, 18))
+    recommended_upper_price = Column(Numeric(38, 18))
+    expected_fee_apr        = Column(Numeric(20, 10))
+    expected_il             = Column(Numeric(20, 10))
+    expected_net_apr        = Column(Numeric(20, 10))
+    reason                  = Column(JSONB)
+    created_at              = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_strategy_signals_pool_time", "pool_address", "signal_time"),
+        Index("idx_strategy_signals_type",      "signal_type"),
     )

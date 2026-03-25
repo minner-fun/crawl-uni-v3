@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from src.db.models import (
     Block, Burn, Collect, Mint, Pool, Swap, SyncCursor, Token,
     PoolPriceSnapshot, PoolMetricsHourly, PoolMetricsDaily,
+    LpPosition, LpPositionAction, StrategySignal,
 )
 
 
@@ -430,3 +431,124 @@ def get_last_daily_metric_date(
         )
     ).scalar()
     return result
+
+
+# ---------------------------------------------------------------------------
+# 策略层专用查询
+# ---------------------------------------------------------------------------
+
+def get_latest_price_snapshot(
+    session: Session, pool_address: str, chain_id: int = 1
+) -> Optional[PoolPriceSnapshot]:
+    """获取该 pool 最新的价格快照（block_number 最大的一条）。"""
+    from sqlalchemy import select
+    return session.execute(
+        select(PoolPriceSnapshot)
+        .where(
+            PoolPriceSnapshot.pool_address == pool_address,
+            PoolPriceSnapshot.chain_id == chain_id,
+        )
+        .order_by(PoolPriceSnapshot.block_number.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def get_recent_daily_metrics(
+    session: Session, pool_address: str, n_days: int, chain_id: int = 1
+) -> list[PoolMetricsDaily]:
+    """
+    获取该 pool 最近 n_days 天的日指标，按日期倒序。
+    以当前 UTC 日期为基准，取 [today - n_days, today] 内的记录。
+    """
+    from sqlalchemy import select
+    from datetime import timedelta, date
+    cutoff = date.today() - timedelta(days=n_days)
+    return list(
+        session.execute(
+            select(PoolMetricsDaily)
+            .where(
+                PoolMetricsDaily.pool_address == pool_address,
+                PoolMetricsDaily.chain_id == chain_id,
+                PoolMetricsDaily.metric_date >= cutoff,
+            )
+            .order_by(PoolMetricsDaily.metric_date.desc())
+        ).scalars().all()
+    )
+
+
+# ---------------------------------------------------------------------------
+# LpPosition
+# ---------------------------------------------------------------------------
+
+def create_lp_position(session: Session, data: dict) -> LpPosition:
+    """
+    创建新仓位记录。
+    data 必须包含：position_id, pool_address, owner_address,
+                   tick_lower, tick_upper, liquidity, opened_at。
+    """
+    pos = LpPosition(**data)
+    session.add(pos)
+    session.flush()
+    return pos
+
+
+def get_active_lp_position(
+    session: Session, pool_address: str
+) -> Optional[LpPosition]:
+    """
+    获取该 pool 当前 OPEN 状态的仓位（按创建时间取最新一条）。
+    正常情况下同一 pool 同时只有一个 OPEN 仓位。
+    """
+    from sqlalchemy import select
+    return session.execute(
+        select(LpPosition)
+        .where(
+            LpPosition.pool_address == pool_address,
+            LpPosition.status == "OPEN",
+        )
+        .order_by(LpPosition.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def close_lp_position(
+    session: Session, position_id: str, closed_at: datetime
+) -> None:
+    """将仓位状态更新为 CLOSED，记录关仓时间。"""
+    from sqlalchemy import update
+    session.execute(
+        update(LpPosition)
+        .where(LpPosition.position_id == position_id)
+        .values(status="CLOSED", closed_at=closed_at, updated_at=datetime.utcnow())
+    )
+
+
+# ---------------------------------------------------------------------------
+# LpPositionAction
+# ---------------------------------------------------------------------------
+
+def create_lp_position_action(session: Session, data: dict) -> LpPositionAction:
+    """
+    记录仓位动作。
+    data 必须包含：position_id, action_type, action_time。
+    可选：tx_hash, block_number, metadata。
+    """
+    action = LpPositionAction(**data)
+    session.add(action)
+    session.flush()
+    return action
+
+
+# ---------------------------------------------------------------------------
+# StrategySignal
+# ---------------------------------------------------------------------------
+
+def create_strategy_signal(session: Session, data: dict) -> StrategySignal:
+    """
+    写入一条策略信号记录。
+    data 必须包含：pool_address, chain_id, signal_time, signal_type。
+    """
+    signal = StrategySignal(**data)
+    session.add(signal)
+    session.flush()
+    return signal
