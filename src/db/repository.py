@@ -531,7 +531,7 @@ def create_lp_position_action(session: Session, data: dict) -> LpPositionAction:
     """
     记录仓位动作。
     data 必须包含：position_id, action_type, action_time。
-    可选：tx_hash, block_number, metadata。
+    可选：tx_hash, block_number, action_metadata。
     """
     action = LpPositionAction(**data)
     session.add(action)

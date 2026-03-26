@@ -439,9 +439,10 @@ class LpPositionAction(Base):
     action_type  = Column(String(32),  nullable=False)
     tx_hash      = Column(String(66))
     block_number = Column(BigInteger)
-    action_time  = Column(DateTime, nullable=False)
-    metadata     = Column(JSONB)
-    created_at   = Column(DateTime, nullable=False, server_default=func.now())
+    action_time     = Column(DateTime, nullable=False)
+    # SQLAlchemy reserves `metadata` on declarative classes; DB column stays "metadata".
+    action_metadata = Column("metadata", JSONB)
+    created_at      = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (
         Index("idx_lp_actions_position_id", "position_id"),

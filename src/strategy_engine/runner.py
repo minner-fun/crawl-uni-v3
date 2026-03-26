@@ -304,7 +304,7 @@ class StrategyRunner:
                 "action_type": action_type,
                 "tx_hash":     result.tx_hash,
                 "action_time": now,
-                "metadata": {
+                "action_metadata": {
                     "tick_lower":  decision.tick_lower,
                     "tick_upper":  decision.tick_upper,
                     "amount0":     result.amount0,
@@ -356,7 +356,7 @@ class StrategyRunner:
                 "action_type": action_type,
                 "tx_hash":     close["burn_tx"],
                 "action_time": now,
-                "metadata": {
+                "action_metadata": {
                     "decrease_amount0": close["decrease"].amount0 if close["decrease"] else None,
                     "decrease_amount1": close["decrease"].amount1 if close["decrease"] else None,
                     "collect_amount0":  close["collect"].amount0,

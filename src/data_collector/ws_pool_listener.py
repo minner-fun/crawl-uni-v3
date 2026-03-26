@@ -130,10 +130,10 @@ POOL_ADDRESSES_CHECKSUM = list(POOL_CONTRACTS.keys())
 
 # Event topic 常量
 _keccak = _w3_http.keccak
-TOPIC_MINT    = _keccak(text="Mint(address,address,int24,int24,uint128,uint256,uint256)").hex()
-TOPIC_BURN    = _keccak(text="Burn(address,int24,int24,uint128,uint256,uint256)").hex()
-TOPIC_COLLECT = _keccak(text="Collect(address,address,int24,int24,uint128,uint128)").hex()
-TOPIC_SWAP    = _keccak(text="Swap(address,address,int256,int256,uint160,uint128,int24)").hex()
+TOPIC_MINT    = "0x" + _keccak(text="Mint(address,address,int24,int24,uint128,uint256,uint256)").hex()
+TOPIC_BURN    = "0x" + _keccak(text="Burn(address,int24,int24,uint128,uint256,uint256)").hex()
+TOPIC_COLLECT = "0x" + _keccak(text="Collect(address,address,int24,int24,uint128,uint128)").hex()
+TOPIC_SWAP    = "0x" + _keccak(text="Swap(address,address,int256,int256,uint160,uint128,int24)").hex()
 
 ALL_TOPICS = [TOPIC_MINT, TOPIC_BURN, TOPIC_COLLECT, TOPIC_SWAP]
 
@@ -160,16 +160,28 @@ _session_counts: dict[str, int] = defaultdict(int)
 # 信号处理
 # ---------------------------------------------------------------------------
 
-def _setup_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:
-    """注册 SIGINT / SIGTERM，触发优雅退出。"""
+def _setup_signal_handlers(
+    loop: asyncio.AbstractEventLoop,
+    main_task: "asyncio.Task | None" = None,
+) -> None:
+    """注册 SIGINT / SIGTERM，触发优雅退出。
+
+    通过 cancel() 主 Task 而非 loop.stop()，确保 finally 清理块可以正常执行。
+    main_task 在 main() 启动后通过 _register_main_task() 注入。
+    """
     def _handle(signum, frame):
         global _shutdown
         logger.info("收到退出信号 (%s)，等待当前批次完成后退出...", signum)
         _shutdown = True
-        loop.call_soon_threadsafe(loop.stop)
+        t = _MAIN_TASK
+        if t is not None:
+            loop.call_soon_threadsafe(t.cancel)
 
     signal.signal(signal.SIGINT,  _handle)
     signal.signal(signal.SIGTERM, _handle)
+
+
+_MAIN_TASK: "asyncio.Task | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +285,7 @@ def _parse_log(raw_log: dict) -> Optional[dict]:
     if not topics:
         return None
 
-    topic0 = topics[0].hex() if isinstance(topics[0], bytes) else topics[0]
+    topic0 = ("0x" + topics[0].hex()) if isinstance(topics[0], bytes) else topics[0]
 
     event_map = {
         TOPIC_MINT:    contract.events.Mint,
@@ -441,9 +453,13 @@ async def _ws_listen_loop(queue: asyncio.Queue) -> None:
                 )
 
                 # ── 订阅事件流 ───────────────────────────────────────────────
-                subscription = await w3.eth.subscribe("logs", WS_FILTER)
+                # web3.py 7.x: eth.subscribe() returns the subscription ID (str);
+                # events are received via w3.socket.process_subscriptions().
+                await w3.eth.subscribe("logs", WS_FILTER)
 
-                async for raw_log in _iter_with_timeout(subscription, WS_EVENT_TIMEOUT):
+                async for raw_log in _iter_with_timeout(
+                    w3.socket.process_subscriptions(), WS_EVENT_TIMEOUT
+                ):
                     if _shutdown:
                         break
                     await queue.put(dict(raw_log))   # 放入 queue，由 writer 消费
@@ -602,8 +618,16 @@ async def main() -> None:
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    async def _run() -> None:
+        global _MAIN_TASK
+        _MAIN_TASK = asyncio.current_task()
+        await main()
+
     _setup_signal_handlers(loop)
     try:
-        loop.run_until_complete(main())
+        loop.run_until_complete(_run())
+    except asyncio.CancelledError:
+        pass  # 优雅退出，忽略取消异常
     finally:
         loop.close()
