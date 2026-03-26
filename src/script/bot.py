@@ -1,19 +1,10 @@
-import requests
-
 import os
-from contextlib import contextmanager
+import requests
 from pathlib import Path
-from typing import Generator
-
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session, sessionmaker
 
-from src.db.models import Base
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-
-
 
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
