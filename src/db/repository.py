@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from src.db.models import (
     Block, Burn, Collect, Mint, Pool, Swap, SyncCursor, Token,
     PoolPriceSnapshot, PoolMetricsHourly, PoolMetricsDaily,
+    PoolStrategyIndicators,
     LpPosition, LpPositionAction, StrategySignal,
 )
 
@@ -474,6 +475,63 @@ def get_recent_daily_metrics(
             .order_by(PoolMetricsDaily.metric_date.desc())
         ).scalars().all()
     )
+
+
+# ---------------------------------------------------------------------------
+# PoolStrategyIndicators
+# ---------------------------------------------------------------------------
+
+def upsert_strategy_indicators(session: Session, data: dict) -> None:
+    """写入或更新策略指标（冲突键：pool_address + metric_hour）。"""
+    _upsert_agg(session, PoolStrategyIndicators, data, "uq_strategy_indicators_pool_hour")
+
+
+def get_latest_strategy_indicators(
+    session: Session, pool_address: str, chain_id: int = 1
+) -> Optional[PoolStrategyIndicators]:
+    """获取该 pool 最新的策略指标记录（metric_hour 最大的一条）。"""
+    from sqlalchemy import select
+    return session.execute(
+        select(PoolStrategyIndicators)
+        .where(
+            PoolStrategyIndicators.pool_address == pool_address,
+            PoolStrategyIndicators.chain_id == chain_id,
+        )
+        .order_by(PoolStrategyIndicators.metric_hour.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def get_recent_strategy_indicators(
+    session: Session, pool_address: str, n_hours: int, chain_id: int = 1
+) -> list[PoolStrategyIndicators]:
+    """获取该 pool 最近 n_hours 条策略指标，按时间倒序。"""
+    from sqlalchemy import select
+    return list(
+        session.execute(
+            select(PoolStrategyIndicators)
+            .where(
+                PoolStrategyIndicators.pool_address == pool_address,
+                PoolStrategyIndicators.chain_id == chain_id,
+            )
+            .order_by(PoolStrategyIndicators.metric_hour.desc())
+            .limit(n_hours)
+        ).scalars().all()
+    )
+
+
+def get_last_strategy_indicators_hour(
+    session: Session, pool_address: str, chain_id: int = 1
+) -> Optional[datetime]:
+    """获取已计算的最大 metric_hour，用于增量计算。"""
+    from sqlalchemy import select, func as sa_func
+    result = session.execute(
+        select(sa_func.max(PoolStrategyIndicators.metric_hour)).where(
+            PoolStrategyIndicators.pool_address == pool_address,
+            PoolStrategyIndicators.chain_id == chain_id,
+        )
+    ).scalar()
+    return result
 
 
 # ---------------------------------------------------------------------------
