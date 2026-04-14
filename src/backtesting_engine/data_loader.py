@@ -31,8 +31,10 @@ from src.db.models import Pool, PoolMetricsDaily, PoolMetricsHourly, Token
 @dataclass
 class HourlyBar:
     metric_hour:          datetime
-    price_open:           float    # 1 token0 = X token1（人类可读）
-    price_close:          float
+    # price_open/close/high/low 来自 pool_metrics_hourly，存的是 price_token1
+    # 对于 USDC(token0)/WETH(token1) 池：price_token1 ≈ 2000（1 WETH = X USDC，即 ETH 价格）
+    price_open:           float    # price_token1：1 token1 = X token0（人类可读）
+    price_close:          float    # price_token1：同上
     price_high:           float
     price_low:            float
     volume_token0_raw:    int      # 绝对值（swap volume，6 decimals for USDC）
@@ -40,7 +42,7 @@ class HourlyBar:
     fee_token0_raw:       int      # 全池手续费 = volume × fee_rate（已存 DB）
     fee_token1_raw:       int
     pool_close_liquidity: int      # 小时末全池活跃流动性（L 单位）
-    eth_price_usdc:       float    # 1 token1 in token0 terms = 1/price_close（ETH 价格）
+    eth_price_usdc:       float    # = price_close = price_token1 = ETH 的 USDC 价格（≈2000）
 
 
 def load_hourly_bars(
@@ -84,7 +86,7 @@ def load_hourly_bars(
             fee_token0_raw       = abs(int(r.fee_token0_raw    or 0)),
             fee_token1_raw       = abs(int(r.fee_token1_raw    or 0)),
             pool_close_liquidity = int(r.close_liquidity or 0),
-            eth_price_usdc       = 1.0 / price_close,   # price_token1 = 1/price_token0
+            eth_price_usdc       = price_close,           # price_close IS price_token1 = ETH 的 USDC 价格
         ))
 
     return bars
@@ -170,20 +172,19 @@ def load_pool_meta(session: Session, pool_address: str) -> PoolMeta:
 # Tick 转换工具
 # ---------------------------------------------------------------------------
 
-def price_close_to_tick(price_close: float, decimals0: int, decimals1: int) -> int:
+def price_close_to_tick(price_token0: float, decimals0: int, decimals1: int) -> int:
     """
-    将人类可读价格（1 token0 = X token1）转换为 Uniswap V3 tick。
+    将 price_token0（1 token0 = X token1，人类可读）转换为 Uniswap V3 tick。
 
-    推导：
-        price_raw = price_close * 10^(decimals1 - decimals0)
-            对于 USDC(6)/WETH(18)：price_raw = price_close * 10^12
-            若 price_close ≈ 0.000333 → price_raw ≈ 3.33e8
-        tick = floor(log(price_raw) / log(1.0001))
-            ≈ floor(19.624 / 9.9995e-5) ≈ 196,250  (ETH ≈ $3000)
+    注意：此函数接受的是 price_token0，而非 price_token1。
+    对于 USDC(token0)/WETH(token1) 池：
+        price_token0 ≈ 0.000333  （1 USDC ≈ 0.000333 WETH，ETH=$3000 时）
+        price_raw = price_token0 × 10^(decimals1 - decimals0) = 0.000333 × 10^12 ≈ 3.33e8
+        tick = floor(log(3.33e8) / log(1.0001)) ≈ 196,250  (ETH ≈ $3000)
     """
-    if price_close <= 0:
+    if price_token0 <= 0:
         return 0
-    price_raw = price_close * (10 ** (decimals1 - decimals0))
+    price_raw = price_token0 * (10 ** (decimals1 - decimals0))
     return math.floor(math.log(price_raw) / math.log(1.0001))
 
 

@@ -57,6 +57,7 @@ import signal
 import sys
 import time
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -166,16 +167,13 @@ def _setup_signal_handlers(
 ) -> None:
     """注册 SIGINT / SIGTERM，触发优雅退出。
 
-    通过 cancel() 主 Task 而非 loop.stop()，确保 finally 清理块可以正常执行。
-    main_task 在 main() 启动后通过 _register_main_task() 注入。
+    收到信号后只设置退出标志，让 listener / writer 自己完成收尾，
+    避免在 finally 前把 queue / pending_buffer 中的事件直接取消掉。
     """
     def _handle(signum, frame):
         global _shutdown
         logger.info("收到退出信号 (%s)，等待当前批次完成后退出...", signum)
         _shutdown = True
-        t = _MAIN_TASK
-        if t is not None:
-            loop.call_soon_threadsafe(t.cancel)
 
     signal.signal(signal.SIGINT,  _handle)
     signal.signal(signal.SIGTERM, _handle)
@@ -462,7 +460,11 @@ async def _ws_listen_loop(queue: asyncio.Queue) -> None:
                 ):
                     if _shutdown:
                         break
-                    await queue.put(dict(raw_log))   # 放入 queue，由 writer 消费
+                    log_receipt = _extract_log_receipt(raw_log)
+                    if log_receipt is None:
+                        logger.warning("[ws] 收到无法识别的订阅消息，已跳过: %s", raw_log)
+                        continue
+                    await queue.put(log_receipt)   # 放入 queue，由 writer 消费
 
         except asyncio.TimeoutError:
             logger.warning("[ws] %ds 无事件，判定连接静默断线，准备重连...",
@@ -495,6 +497,41 @@ async def _iter_with_timeout(subscription, timeout: float):
             raise   # 向上传播给 _ws_listen_loop 处理
 
 
+def _extract_log_receipt(payload) -> Optional[dict]:
+    """兼容 web3.py 不同版本的订阅消息结构，提取真正的 log receipt。
+
+    web3.py 7.x 中 process_subscriptions() 每次 yield 的结构为：
+        {'subscription': '0x...', 'result': AttributeDict({address, topics, ...})}
+    其中 AttributeDict 继承自 collections.abc.Mapping 而非 dict，
+    因此必须用 isinstance(x, Mapping) 而非 isinstance(x, dict) 来判断。
+    """
+    if isinstance(payload, Mapping):
+        message = dict(payload)
+    else:
+        try:
+            message = dict(payload)
+        except Exception:
+            return None
+
+    # 已经是裸 log（HTTP backfill 路径或旧版 web3 直接 yield log）
+    if "address" in message and "topics" in message:
+        return message
+
+    # web3.py 7.x process_subscriptions() 格式：{'subscription': ..., 'result': AttributeDict}
+    result = message.get("result")
+    if isinstance(result, Mapping):
+        return dict(result)
+
+    # 完整 JSON-RPC 通知格式：{'params': {'subscription': ..., 'result': ...}}
+    params = message.get("params")
+    if isinstance(params, Mapping):
+        nested_result = params.get("result")
+        if isinstance(nested_result, Mapping):
+            return dict(nested_result)
+
+    return None
+
+
 def _get_last_synced_block() -> Optional[int]:
     """
     读取所有被监听池子中 sync_cursor 的最小值，作为 backfill 起点。
@@ -521,9 +558,14 @@ async def _event_writer(queue: asyncio.Queue) -> None:
     - 收到新事件时，将 block_number ≤ latest_confirmed 的条目批量写 DB
     - 未确认的继续留在 buffer
     """
-    while not _shutdown:
+    while True:
+        if _shutdown and queue.empty():
+            await _flush_confirmed_buffer()
+            break
+
         try:
-            raw_log = await asyncio.wait_for(queue.get(), timeout=3.0)
+            timeout = 1.0 if _shutdown else 3.0
+            raw_log = await asyncio.wait_for(queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             # 定期清理已确认的 buffer，即使 queue 空闲
             await _flush_confirmed_buffer()
@@ -561,17 +603,15 @@ async def _flush_confirmed_buffer() -> None:
         return
 
     written = await _write_logs_to_db(to_write, confirmed=True)
+    max_block = max(log.get("blockNumber", 0) for log in to_write)
+    await asyncio.get_event_loop().run_in_executor(None, _update_cursor, max_block)
 
-    if written > 0:
-        max_block = max(log.get("blockNumber", 0) for log in to_write)
-        await asyncio.get_event_loop().run_in_executor(None, _update_cursor, max_block)
-
-        now = datetime.utcnow().strftime("%H:%M:%S")
-        logger.info(
-            "[writer] %s  写入 %d 条  (%s)",
-            now, written,
-            " ".join(f"{k}={v}" for k, v in _session_counts.items() if v),
-        )
+    now = datetime.utcnow().strftime("%H:%M:%S")
+    stats = " ".join(f"{k}={v}" for k, v in _session_counts.items() if v) or "无新增"
+    logger.info(
+        "[writer] %s  处理 %d 条，新增 %d 条  (%s)",
+        now, len(to_write), written, stats,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -602,12 +642,16 @@ async def main() -> None:
 
     try:
         await asyncio.gather(listener_task, writer_task)
-    except asyncio.CancelledError:
-        pass
     finally:
         listener_task.cancel()
-        writer_task.cancel()
-        await asyncio.gather(listener_task, writer_task, return_exceptions=True)
+        await asyncio.gather(listener_task, return_exceptions=True)
+
+        try:
+            await asyncio.wait_for(writer_task, timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.warning("[writer] 等待队列排空超时，强制停止")
+            writer_task.cancel()
+        await asyncio.gather(writer_task, return_exceptions=True)
 
         logger.info("─" * 60)
         logger.info("监听已停止，本次会话写入统计：")

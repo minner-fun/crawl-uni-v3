@@ -27,8 +27,8 @@ from src.strategy_engine.base import BaseStrategy, Decision, StrategyDecision
 from src.strategy_engine.context import ActivePosition, MarketContext
 
 # ── 策略参数（可外部覆盖，但保持默认值便于快速测试）────────────────────────────
-VOLUME_TVL_OPEN_THRESHOLD  = Decimal("2.0")
-VOLUME_TVL_CLOSE_THRESHOLD = Decimal("0.5")
+VOLUME_TVL_OPEN_THRESHOLD  = Decimal("2.0")  # 开仓阈值
+VOLUME_TVL_CLOSE_THRESHOLD = Decimal("0.5")  # 平仓阈值
 RANGE_PCT                  = 0.05    # 区间半径：±5%
 REBALANCE_BOUNDARY_RATIO   = 0.20   # 距边界不足 20% 区间宽度时触发 rebalance
 USDC_RAW                   = 200_000_000  # 200 USDC，6 decimals

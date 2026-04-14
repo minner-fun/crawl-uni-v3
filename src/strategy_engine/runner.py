@@ -107,7 +107,7 @@ class StrategyRunner:
                     n_days=self.cfg.metrics_lookback_days,
                     chain_id=self.cfg.chain_id,
                 )
-                position = get_active_position(
+                position = get_active_position(                    # 从lp_positions表中获取当前OPEN状态的仓位
                     session, self.cfg.pool_address, self.cfg.chain_id
                 )
             except ValueError as exc:

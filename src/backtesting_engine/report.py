@@ -50,7 +50,7 @@ def print_report(result: "BacktestResult") -> None:
     print(f"  {'手续费收入':<20s}: {result.total_fees_usdc:>+10.2f}")
     print(f"  {'无常损失 IL':<20s}: {result.total_il_usdc:>+10.2f}")
     print(f"  {'Gas 成本':<20s}: {-result.total_gas_usdc:>+10.2f}")
-    print(f"  {'手续费 − IL（净贡献）':<20s}: {result.fee_minus_il_usdc:>+10.2f}")
+    print(f"  {'手续费-IL（净贡献）':<20s}: {result.fee_minus_il_usdc:>+10.2f}")
 
     # ── V3 专属 ───────────────────────────────────────────────────────────
     print(f"\n  【V3 LP 专属指标】")

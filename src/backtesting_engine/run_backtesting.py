@@ -7,8 +7,8 @@ result = BacktestSimulator(
     strategy = VolumeRebalanceStrategy(),
     config   = BacktestConfig(
         pool_address = UNISWAP_V3_USDC_ETH_POOL_ADDRESS,
-        from_dt      = datetime(2024, 1, 1),
-        to_dt        = datetime(2024, 12, 31),
+        from_dt      = datetime(2026, 1, 28),
+        to_dt        = datetime(2026, 3, 11),
     ),
 ).run()
 

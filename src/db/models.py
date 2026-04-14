@@ -398,6 +398,59 @@ class PoolMetricsDaily(Base):
 
 
 # ---------------------------------------------------------------------------
+# 第三点五层：策略指标表（独立于 data_engine 中间表，直接从原始表计算）
+# ---------------------------------------------------------------------------
+
+class PoolStrategyIndicators(Base):
+    """
+    策略指标表：每小时从 swaps / pools 原始表直接计算，不依赖 data_engine 中间聚合表。
+
+    字段说明
+    --------
+    metric_hour         : 指标对应的小时（UTC，已对齐到整点）
+    computed_at         : 本条记录的实际计算时间
+    price_current       : 当前价格（price_token1，如 USDC/WETH 池中即 ETH 的 USDC 价格）
+    price_24h_ago       : 24 小时前的价格（用于 IL 计算的基准价）
+    tvl_usd             : 基于当前 liquidity + sqrtPriceX96 估算的 TVL（USD）
+    volume_24h_usd      : 过去 24 小时内稳定币侧的绝对交易量（USD）
+    volume_tvl_ratio    : volume_24h_usd / tvl_usd，资金利用率
+    fee_rate            : 池费率（小数，如 0.0005 = 0.05%）
+    fee_apr             : volume_24h_usd × fee_rate / tvl_usd × 365，年化手续费收益率
+    price_volatility_24h: 过去 24 小时小时级收盘价的对数收益率标准差
+    il_estimate         : 基于 24H 价格变化的全范围无常损失估算（负数=损失）
+    """
+    __tablename__ = "pool_strategy_indicators"
+
+    id              = Column(BigInteger, primary_key=True, autoincrement=True)
+    pool_address    = Column(String(42), ForeignKey("pools.pool_address"), nullable=False)
+    chain_id        = Column(Integer, nullable=False, default=1)
+    metric_hour     = Column(DateTime, nullable=False)
+    computed_at     = Column(DateTime, nullable=False, server_default=func.now())
+
+    price_current       = Column(_N38_18)
+    price_24h_ago       = Column(_N38_18)
+
+    tvl_usd             = Column(_N38_18)
+    volume_24h_usd      = Column(_N38_18)
+    volume_tvl_ratio    = Column(_N20_10)
+
+    fee_rate            = Column(_N20_10)
+    fee_apr             = Column(_N20_10)
+
+    price_volatility_24h = Column(_N20_10)
+    il_estimate          = Column(_N20_10)
+
+    created_at  = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at  = Column(DateTime, nullable=False, server_default=func.now(),
+                         onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("pool_address", "metric_hour", name="uq_strategy_indicators_pool_hour"),
+        Index("idx_strategy_indicators_pool_time", "pool_address", "metric_hour"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # 第四层：策略执行状态表
 # ---------------------------------------------------------------------------
 

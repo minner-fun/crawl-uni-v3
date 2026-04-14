@@ -157,8 +157,11 @@ class BacktestSimulator:
         snapshots: list[HourlySnapshot] = []
 
         for bar in bars:
-            tick  = price_close_to_tick(bar.price_close, meta.decimals0, meta.decimals1)
-            price = bar.eth_price_usdc   # 1 ETH = X USDC
+            # bar.price_close 是 price_token1（ETH 价格，≈2000），
+            # price_close_to_tick 需要 price_token0（1 USDC = X WETH，≈0.0005）
+            price_token0 = 1.0 / bar.price_close
+            tick  = price_close_to_tick(price_token0, meta.decimals0, meta.decimals1)
+            price = bar.eth_price_usdc   # 1 ETH = X USDC（已修正，≈2000）
 
             # ── 1. 手续费累积（本 bar 的 volume，若仓位 in-range）──────────────
             if position is not None and position.is_in_range(tick):
@@ -293,7 +296,11 @@ class BacktestSimulator:
         meta:    PoolMeta,
     ) -> MarketContext:
         """将 HourlyBar + 元数据组装为 MarketContext，与真实运行时结构完全一致。"""
-        price_raw = bar.price_close * (10 ** (meta.decimals1 - meta.decimals0))
+        # bar.price_close = price_token1（ETH 的 USDC 价格，≈2000）
+        # price_token0 = 1/price_token1（1 USDC 换多少 WETH，≈0.0005）
+        # sqrtPriceX96 的内部 raw_price = token1_raw/token0_raw = price_token0 × 10^(d1-d0)
+        price_token0_f = 1.0 / bar.price_close
+        price_raw = price_token0_f * (10 ** (meta.decimals1 - meta.decimals0))
         sqrt_px96 = int(math.sqrt(price_raw) * (2 ** 96))
 
         return MarketContext(
@@ -302,8 +309,8 @@ class BacktestSimulator:
             current_tick          = tick,
             sqrt_price_x96        = sqrt_px96,
             current_liquidity     = bar.pool_close_liquidity,
-            price_token0          = Decimal(str(bar.price_close)),
-            price_token1          = Decimal(str(bar.eth_price_usdc)) if bar.eth_price_usdc else None,
+            price_token0          = Decimal(str(price_token0_f)),     # ≈0.0005（1 USDC = X WETH）
+            price_token1          = Decimal(str(bar.eth_price_usdc)), # ≈2000（1 WETH = X USDC）
             tick_spacing          = meta.tick_spacing,
             fee                   = meta.fee_tier,
             token0                = meta.token0,
